@@ -19,18 +19,33 @@ export default function SignIn() {
     setLoading(true);
 
     try {
+      console.log('Attempting sign in with identifier:', identifier);
       const result = await signIn(identifier, password);
-      console.log('Sign in result:', result);
-
+      
       if (result.error) {
-        setError(result.error.message || 'Sign in failed');
+        console.error('Sign in error:', result.error);
+        setError(result.error.message);
+        setLoading(false);
+        return;
+      }
+
+      if (result.requiresOTP) {
+        console.log('OTP required, redirecting to verification page');
+        // Redirect to 2FA verification with proper URL encoding
+        const userId = encodeURIComponent(result.data.userId);
+        const encodedIdentifier = encodeURIComponent(identifier);
+        const url = `/auth/verify-2fa?userId=${userId}&identifier=${encodedIdentifier}`;
+        
+        console.log('Redirecting to:', url);
+        router.push(url);
       } else {
+        // This shouldn't happen in our flow, but handle it just in case
+        console.log('No OTP required, redirecting to dashboard');
         router.push('/dashboard');
       }
     } catch (err: any) {
-      console.error('Sign in error:', err);
+      console.error('Unexpected sign in error:', err);
       setError(err.message || 'An unexpected error occurred');
-    } finally {
       setLoading(false);
     }
   };
@@ -40,6 +55,9 @@ export default function SignIn() {
       <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-md">
         <div className="text-center">
           <h1 className="text-2xl font-bold">Sign In</h1>
+          <p className="mt-2 text-sm text-gray-600">
+            Sign in with your email or phone number
+          </p>
         </div>
 
         {error && (
@@ -59,8 +77,8 @@ export default function SignIn() {
               required
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="Enter email or phone number"
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-black"
+              placeholder="Email or Phone Number"
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
 
@@ -74,21 +92,25 @@ export default function SignIn() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-black"
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
 
           <div className="flex items-center justify-between">
-            <Link href="/auth/forgot-password" className="text-sm text-blue-600 hover:underline">
-              Forgot your password?
-            </Link>
+            <div className="text-sm">
+              <Link href="/auth/forgot-password" className="font-medium text-blue-600 hover:text-blue-500">
+                Forgot your password?
+              </Link>
+            </div>
           </div>
 
           <div>
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
+                loading ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
@@ -98,7 +120,7 @@ export default function SignIn() {
         <div className="text-center mt-4">
           <p className="text-sm text-gray-600">
             Don't have an account?{' '}
-            <Link href="/auth/signup" className="text-blue-600 hover:underline">
+            <Link href="/auth/signup" className="font-medium text-blue-600 hover:text-blue-500">
               Sign up
             </Link>
           </p>

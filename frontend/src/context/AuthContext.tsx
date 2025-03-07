@@ -10,14 +10,18 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+const API_URL = 'http://localhost:3001/api';
+
 type AuthContextType = {
   user: User | null;
   session: Session | null;
   isLoading: boolean;
   signUp: (email: string, password: string, phone: string) => Promise<{ error: any }>;
-  signIn: (identifier: string, password: string) => Promise<{ error: any, data?: any }>;
+  signIn: (identifier: string, password: string) => Promise<{ error: any, data?: any, requiresOTP?: boolean }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: any }>;
+  verify2FA: (userId: string, otp: string) => Promise<{ error: any, data?: any }>;
+  resend2FA: (userId: string, identifier: string) => Promise<{ error: any }>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -38,13 +42,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(session?.user ?? null);
         setIsLoading(false);
         
-        // If user just signed in, redirect to dashboard
-        if (event === 'SIGNED_IN' && window.location.pathname !== '/dashboard') {
+        if (event === 'SIGNED_IN' && !window.location.pathname.includes('/auth/verify-2fa')) {
           console.log('User signed in, redirecting to dashboard');
           router.push('/dashboard');
         }
         
-        // If user just signed out, redirect to home
         if (event === 'SIGNED_OUT') {
           console.log('User signed out, redirecting to home');
           router.push('/');
@@ -52,7 +54,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     );
 
-    // Initial session fetch
     console.log('AuthProvider: Fetching initial session');
     supabase.auth.getSession().then(({ data: { session } }) => {
       console.log('Initial session:', session?.user?.email);
@@ -60,8 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(session?.user ?? null);
       setIsLoading(false);
       
-      // If user is already signed in and not on dashboard, redirect to dashboard
-      if (session && window.location.pathname !== '/dashboard') {
+      if (session && !window.location.pathname.includes('/auth/verify-2fa') && window.location.pathname !== '/dashboard') {
         console.log('User already signed in, redirecting to dashboard');
         router.push('/dashboard');
       }
@@ -97,16 +97,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .from('users')
         .insert([
           {
-            user_id: authData.user.id,
             email: email,
-            phone: phone
+            phone: phone,
           }
         ]);
 
       if (insertError) {
         console.error('Error inserting user data:', insertError);
-        // If inserting fails, we should probably delete the auth user
-        await supabase.auth.admin.deleteUser(authData.user.id);
         return { error: insertError };
       }
 
@@ -122,9 +119,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       let email = identifier;
       
-      // If the identifier is not an email (doesn't contain @), assume it's a phone number
+      // If identifier is a phone number, get the associated email
       if (!identifier.includes('@')) {
-        // Query the users table to get the email associated with this phone number
+        console.log('Phone number detected, looking up associated email');
         const { data: userData, error: queryError } = await supabase
           .from('users')
           .select('email')
@@ -132,74 +129,167 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single();
 
         if (queryError || !userData) {
-          console.error('Error finding user by phone:', queryError);
+          console.error('No user found with this phone number:', queryError);
           return { error: new Error('No user found with this phone number') };
         }
-
         email = userData.email;
+        console.log('Found email for phone number:', email);
       }
 
-      // Now sign in with the email and password
-      const { data, error } = await supabase.auth.signInWithPassword({
+      // Store credentials for later use after OTP verification
+      sessionStorage.setItem('temp_email', email);
+      sessionStorage.setItem('temp_password', password);
+      sessionStorage.setItem('temp_identifier', identifier);
+
+      console.log('Stored credentials in session storage');
+
+      // Generate and send OTP
+      console.log('Sending OTP generation request to API');
+      try {
+        const response = await fetch(`${API_URL}/otp/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: email, // Using email as userId
+            identifier: identifier
+          })
+        });
+
+        const otpResult = await response.json();
+        console.log('OTP generation response:', otpResult);
+        
+        if (!response.ok) {
+          console.error('OTP generation failed:', otpResult.error);
+          return { error: new Error(otpResult.error || 'Failed to generate OTP') };
+        }
+
+        console.log('OTP generated successfully, returning data for redirection');
+        return { 
+          error: null, 
+          data: { userId: email },
+          requiresOTP: true 
+        };
+      } catch (apiError: any) {
+        console.error('API error during OTP generation:', apiError);
+        return { error: new Error('Failed to connect to authentication service. Please try again.') };
+      }
+    } catch (error: any) {
+      console.error('Unexpected error during sign in:', error);
+      return { error: new Error(error.message || 'An unexpected error occurred') };
+    }
+  };
+
+  const verify2FA = async (userId: string, otp: string) => {
+    try {
+      // Verify OTP
+      const response = await fetch(`${API_URL}/otp/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, otp })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        return { error: new Error(result.error) };
+      }
+
+      if (!result.verified) {
+        return { error: new Error('Invalid or expired OTP') };
+      }
+
+      // Get stored credentials
+      const email = sessionStorage.getItem('temp_email');
+      const password = sessionStorage.getItem('temp_password');
+
+      if (!email || !password) {
+        return { error: new Error('Session expired. Please sign in again.') };
+      }
+
+      // Sign in with Supabase
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
-      
-      if (error) {
-        console.error('Sign in error:', error);
-        return { error };
+
+      // Clean up stored credentials
+      sessionStorage.removeItem('temp_email');
+      sessionStorage.removeItem('temp_password');
+      sessionStorage.removeItem('temp_identifier');
+
+      if (signInError) {
+        console.error('Sign in error after 2FA:', signInError);
+        return { error: new Error('Failed to create session') };
       }
-      
-      console.log('Sign in successful:', data.user?.email);
-      console.log('JWT Token:', data.session?.access_token.substring(0, 15) + '...');
-      
-      // Store the session and user in state
+
       setSession(data.session);
       setUser(data.user);
-      
-      // Force a hard navigation to dashboard
-      window.location.href = '/dashboard';
-      
-      return { data, error: null };
+
+      return { error: null, data: { verified: true } };
     } catch (error) {
-      console.error('Unexpected error during sign in:', error);
+      console.error('Error in verify2FA:', error);
+      return { error };
+    }
+  };
+
+  const resend2FA = async (userId: string, identifier: string) => {
+    try {
+      const response = await fetch(`${API_URL}/otp/resend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, identifier })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        return { error: new Error(result.error) };
+      }
+
+      return { error: null };
+    } catch (error) {
+      console.error('Error in resend2FA:', error);
       return { error };
     }
   };
 
   const signOut = async () => {
-    console.log('AuthContext: Signing out');
-    const { error } = await supabase.auth.signOut();
-    
-    if (error) {
-      console.error('Sign out error:', error);
-    } else {
-      // Clear the session and user from state
-      setSession(null);
+    try {
+      await supabase.auth.signOut();
       setUser(null);
+      setSession(null);
+    } catch (error) {
+      console.error('Error signing out:', error);
     }
   };
 
   const resetPassword = async (email: string) => {
-    console.log('AuthContext: Resetting password for email:', email);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset-password`,
-    });
-    console.log('Reset password result:', error);
-    return { error };
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
+      });
+      return { error };
+    } catch (error) {
+      console.error('Error resetting password:', error);
+      return { error };
+    }
   };
 
-  const value = {
-    user,
-    session,
-    isLoading,
-    signUp,
-    signIn,
-    signOut,
-    resetPassword,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        session,
+        isLoading,
+        signUp,
+        signIn,
+        signOut,
+        resetPassword,
+        verify2FA,
+        resend2FA,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
