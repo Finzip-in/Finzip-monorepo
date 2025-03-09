@@ -29,7 +29,7 @@ class EmailService {
               <h2 style="color: #333;">Finzip Login Verification</h2>
               <p>Your OTP for login verification is:</p>
               <h1 style="color: #4CAF50; font-size: 32px; letter-spacing: 5px; margin: 20px 0;">${otp}</h1>
-              <p>This OTP is valid for ${process.env.OTP_EXPIRY_SECONDS/60} minutes.</p>
+              <p>This OTP is valid for 1 minutes.</p>
               <p style="color: #666; font-size: 14px;">For security reasons, please do not share this OTP with anyone.</p>
               <hr style="border: 1px solid #eee; margin: 20px 0;">
               <p style="color: #999; font-size: 12px;">This is an automated message, please do not reply.</p>
