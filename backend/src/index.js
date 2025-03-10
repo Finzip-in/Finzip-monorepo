@@ -16,11 +16,6 @@ app.use(express.json());
 // Routes
 app.use('/api/otp', otpRoutes);
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.send('finzip-backend-api');
-});
-
 // Initialize database
 initializeDatabase().catch(err => {
   console.error('Database initialization failed:', err);
