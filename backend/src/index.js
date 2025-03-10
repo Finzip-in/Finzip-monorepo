@@ -13,6 +13,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  res.send("Finzip Backend API - Deployed via GitHub Actions 🚀");
+});
+
 // Routes
 app.use('/api/otp', otpRoutes);
 
