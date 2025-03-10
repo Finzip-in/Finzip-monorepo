@@ -118,8 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     console.log('AuthContext: Signing in with identifier:', identifier);
     try {
       let email = identifier;
-      
-      // If identifier is a phone number, get the associated email
+  
+      // If identifier is a phone number, look up the associated email
       if (!identifier.includes('@')) {
         console.log('Phone number detected, looking up associated email');
         const { data: userData, error: queryError } = await supabase
@@ -127,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .select('email')
           .eq('phone', identifier)
           .single();
-
+  
         if (queryError || !userData) {
           console.error('No user found with this phone number:', queryError);
           return { error: new Error('No user found with this phone number') };
@@ -135,39 +135,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email = userData.email;
         console.log('Found email for phone number:', email);
       }
-
-      // Store credentials for later use after OTP verification
+  
+      // First, validate the email and password by attempting to sign in
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+  
+      // If authentication fails, return the error immediately
+      if (authError) {
+        console.error('Authentication failed:', authError);
+        return { error: new Error('Incorrect email or password') };
+      }
+  
+      // Since we’re using OTP as a second factor, sign out the created session immediately
+      // so that the session is only created after OTP verification.
+      await supabase.auth.signOut();
+  
+      // Store credentials for use after OTP verification
       sessionStorage.setItem('temp_email', email);
       sessionStorage.setItem('temp_password', password);
       sessionStorage.setItem('temp_identifier', identifier);
-
-      console.log('Stored credentials in session storage');
-
+  
+      console.log('Credentials verified and stored, generating OTP...');
+  
       // Generate and send OTP
-      console.log('Sending OTP generation request to API');
       try {
         const response = await fetch(`${API_URL}/otp/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             userId: email, // Using email as userId
-            identifier: identifier
-          })
+            identifier: identifier,
+          }),
         });
-
+  
         const otpResult = await response.json();
         console.log('OTP generation response:', otpResult);
-        
+  
         if (!response.ok) {
           console.error('OTP generation failed:', otpResult.error);
           return { error: new Error(otpResult.error || 'Failed to generate OTP') };
         }
-
+  
         console.log('OTP generated successfully, returning data for redirection');
-        return { 
-          error: null, 
+        return {
+          error: null,
           data: { userId: email },
-          requiresOTP: true 
+          requiresOTP: true,
         };
       } catch (apiError: any) {
         console.error('API error during OTP generation:', apiError);
@@ -178,6 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: new Error(error.message || 'An unexpected error occurred') };
     }
   };
+  
 
   const verify2FA = async (userId: string, otp: string) => {
     try {
